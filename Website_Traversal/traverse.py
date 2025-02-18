@@ -4,7 +4,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from collections import deque
-
+import ssl
 
 def byte2str(b):
     """
@@ -27,6 +27,7 @@ def getLinks(url, baseurl="https://secon.utulsa.edu/cs2123/webtraverse/"):
         print('You must first install the BeautifulSoup package for this code to work')
         raise
     # Fetch the URL and load it into the HTML parser
+    ssl._create_default_https_context = ssl._create_unverified_context
     soup = BeautifulSoup(urllib.request.urlopen(
         url).read(), features="html.parser")
     # Pull out the links from the HTML and return
