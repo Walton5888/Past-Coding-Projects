@@ -1,20 +1,8 @@
 from pathlib import Path
-
+from .bignet import BIGNET_DIM
 import torch
 
-BIGNET_DIM = 1024
-# Comment me out if you want to play with a 2GB model
-# Please note though that you will not be able to load the bignet.pth checkpoint
-# and grading will not work
-# BIGNET_DIM = 6144
-
-
 class LayerNorm(torch.nn.Module):
-    """
-    torch.nn.LayerNorm is a bit weird with the shape of the input tensor.
-    We instead use torch.nn.functional.group_norm with num_groups=1.
-    """
-
     num_channels: int
     eps: float
 
@@ -33,30 +21,48 @@ class LayerNorm(torch.nn.Module):
             self.register_parameter("bias", None)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # torch.nn.LayerNorm is a bit weird with the shape of the input tensor
-        # GroupNorm handles this better
-        r = torch.nn.functional.group_norm(x, 1, self.weight, self.bias, self.eps)
-        return r
+        return torch.nn.functional.group_norm(x, 1, self.weight, self.bias, self.eps)
 
+class HalfLinear(torch.nn.Linear):
+    def __init__(self, in_features, out_features, bias=True):
+        super().__init__(in_features, out_features, bias=bias)
+        # Convert parameters to half precision
+        self.weight.data = self.weight.data.half()
+        if self.bias is not None:
+            self.bias.data = self.bias.data.half()
+        # Disable gradients for linear layer parameters
+        self.weight.requires_grad_(False)
+        if self.bias is not None:
+            self.bias.requires_grad_(False)
+    
+    def forward(self, x):
+        # Forward pass without tracking gradients for linear operations
+        with torch.no_grad():
+            orig_dtype = x.dtype
+            out = super().forward(x.half())
+            return out.to(orig_dtype)
 
-class BigNet(torch.nn.Module):
+class HalfBigNet(torch.nn.Module):
     class Block(torch.nn.Module):
         def __init__(self, channels):
             super().__init__()
             self.model = torch.nn.Sequential(
-                torch.nn.Linear(channels, channels),
+                HalfLinear(channels, channels),
                 torch.nn.ReLU(),
-                torch.nn.Linear(channels, channels),
+                HalfLinear(channels, channels),
                 torch.nn.ReLU(),
-                torch.nn.Linear(channels, channels),
+                HalfLinear(channels, channels),
             )
 
         def forward(self, x):
-            return self.model(x) + x
+            # Forward pass for block operations
+            with torch.set_grad_enabled(False):
+                out = self.model(x)
+            # Only residual connection can have gradients
+            return out + x
 
     def __init__(self):
         super().__init__()
-
         self.model = torch.nn.Sequential(
             self.Block(BIGNET_DIM),
             LayerNorm(BIGNET_DIM),
@@ -74,9 +80,11 @@ class BigNet(torch.nn.Module):
     def forward(self, x):
         return self.model(x)
 
-
-def load(path: Path | None) -> BigNet:
-    net = BigNet()
+def load(path: Path | None) -> HalfBigNet:
+    net = HalfBigNet()
     if path is not None:
         net.load_state_dict(torch.load(path, weights_only=True))
     return net
+
+
+
